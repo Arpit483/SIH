@@ -1,0 +1,99 @@
+﻿"""
+main.py: FastAPI ML Service & Orchestration Entrypoint for SatQuery AI.
+SIH26167 | Indian Space Research Organisation (ISRO)
+"""
+
+import sys
+import logging
+from pathlib import Path
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from backend.routes.inference import router as inference_router
+from backend.routes.upload import router as upload_router
+from backend.routes.report import router as report_router
+from backend.model_manager import ModelManager
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s - %(message)s")
+logger = logging.getLogger("satquery.server")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    logger.info("=========================================================")
+    logger.info("🛰️  Starting SatQuery AI Backend (ISRO SIH26167)")
+    logger.info("   Model: SatQueryUnified (RemoteCLIP ViT-L/14 Shared Backbone)")
+    logger.info("   Heads: VQA, Grounding (DETR), Change (Siamese), Fusion (X-Attn)")
+    logger.info("   Sensors: Sentinel-1/2, Cartosat-2S, RISAT-1/2")
+    logger.info("=========================================================")
+    
+    # Warm load the model in memory
+    try:
+        ModelManager.get_instance()
+    except Exception as e:
+        logger.warning("Model initialization notice: %s", e)
+        
+    yield
+    # Shutdown
+    logger.info("SatQuery AI backend shutting down.")
+
+
+app = FastAPI(
+    title="SatQuery AI API",
+    description="Agentic Vision-Language Assistant for Multimodal Remote Sensing Analysis",
+    version="2.0.0",
+    lifespan=lifespan
+)
+
+# CORS config
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], # Allows Next.js local frontend
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Static file mounts
+uploads_dir = Path("d:/SIH/backend/uploads/thumbnails")
+uploads_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/thumbnails", StaticFiles(directory=str(uploads_dir)), name="thumbnails")
+
+reports_dir = Path("d:/SIH/backend/reports")
+reports_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/reports", StaticFiles(directory=str(reports_dir)), name="reports")
+
+# Include Routers
+app.include_router(inference_router)
+app.include_router(upload_router)
+app.include_router(report_router)
+
+
+@app.get("/health")
+async def health():
+    return {
+        "status": "healthy",
+        "service": "SatQuery AI",
+        "ps_number": "SIH26167",
+        "organization": "ISRO",
+        "capabilities": [
+            "single_image_vqa",
+            "text_guided_region_grounding",
+            "multitemporal_change_understanding",
+            "optical_sar_cross_modal_analysis",
+            "agentic_orchestration"
+        ]
+    }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=False)
