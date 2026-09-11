@@ -6,11 +6,9 @@ import {
   Map as MapIcon, 
   MessageSquare, 
   FileText, 
-  Activity, 
   Terminal,
-  Radio,
   Satellite,
-  Compass
+  Cpu
 } from "lucide-react";
 import { MissionScenario } from "../../types/satquery";
 import { MOCK_SCENARIOS } from "../../constants/mockScenarios";
@@ -24,6 +22,8 @@ interface SidebarNavProps {
   filesCount: number;
   currentScenario: MissionScenario;
   onSelectScenario: (scenario: MissionScenario) => void;
+  backendOnline?: boolean;
+  backendDevice?: string;
 }
 
 export const SidebarNav: React.FC<SidebarNavProps> = ({
@@ -33,6 +33,8 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
   filesCount,
   currentScenario,
   onSelectScenario,
+  backendOnline = false,
+  backendDevice = "mps",
 }) => {
   const navItems: {
     id: NavSection;
@@ -159,9 +161,23 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({
           })}
         </div>
 
-        <div className="px-2 pt-2 border-t border-charcoal-800 flex items-center justify-between text-[10px] text-charcoal-400">
-          <span>NRSC-HYD-NODE</span>
-          <span className="text-charcoal-300">ONLINE</span>
+        {/* Backend & Device Telemetry Status */}
+        <div className="px-2 pt-2 border-t border-charcoal-800 space-y-1 text-[10px]">
+          <div className="flex items-center justify-between text-charcoal-400">
+            <span>FASTAPI ML:</span>
+            <span className={`font-semibold flex items-center gap-1 ${backendOnline ? "text-status-green" : "text-charcoal-400"}`}>
+              <span className={`w-1.5 h-1.5 rounded-full ${backendOnline ? "bg-status-green" : "bg-charcoal-500"}`} />
+              {backendOnline ? "CONNECTED" : "OFFLINE"}
+            </span>
+          </div>
+          <div className="flex items-center justify-between text-charcoal-400">
+            <span className="flex items-center gap-1">
+              <Cpu className="w-3 h-3 text-coral-accent" /> DEVICE:
+            </span>
+            <span className="text-charcoal-200 uppercase font-semibold">
+              {backendOnline ? backendDevice : "M4 MPS / CPU"}
+            </span>
+          </div>
         </div>
       </div>
     </aside>

@@ -1,4 +1,4 @@
-﻿"""
+"""
 routes/upload.py: File Upload and Preprocessing Endpoint.
 """
 
@@ -9,13 +9,14 @@ from pathlib import Path
 from typing import List
 from fastapi import APIRouter, UploadFile, File, HTTPException
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 from backend.preprocessing.compatibility_checker import CompatibilityChecker
 from backend.preprocessing.geotiff_handler import to_thumbnail
 
 router = APIRouter(prefix="/api", tags=["upload"])
 
-UPLOAD_DIR = Path("d:/SIH/backend/uploads")
-THUMBNAIL_DIR = Path("d:/SIH/backend/uploads/thumbnails")
+UPLOAD_DIR = PROJECT_ROOT / "backend" / "uploads"
+THUMBNAIL_DIR = UPLOAD_DIR / "thumbnails"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 THUMBNAIL_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -36,7 +37,7 @@ async def upload_files(files: List[UploadFile] = File(...)):
     
     for f in files:
         ext = Path(f.filename).suffix.lower()
-        if ext not in [".tif", ".tiff", ".png", ".jpg", ".jpeg"]:
+        if ext not in [".tif", ".tiff", ".geotiff", ".png", ".jpg", ".jpeg"]:
             raise HTTPException(status_code=400, detail=f"Unsupported format '{ext}'. Use GeoTIFF, TIFF, PNG, or JPEG.")
             
         unique_name = f"{uuid.uuid4().hex[:8]}_{f.filename}"
@@ -52,8 +53,11 @@ async def upload_files(files: List[UploadFile] = File(...)):
         thumb_path = THUMBNAIL_DIR / thumb_name
         try:
             pil_thumb = to_thumbnail(str(dest_path), max_size=512)
-            pil_thumb.save(thumb_path, "JPEG", quality=85)
-            thumbnail_urls.append(f"/thumbnails/{thumb_name}")
+            if pil_thumb is not None:
+                pil_thumb.save(thumb_path, "JPEG", quality=85)
+                thumbnail_urls.append(f"/thumbnails/{thumb_name}")
+            else:
+                thumbnail_urls.append("")
         except Exception:
             thumbnail_urls.append("")
 
@@ -70,6 +74,21 @@ async def upload_files(files: List[UploadFile] = File(...)):
             "sensor_types": report.sensor_types,
             "issues": report.issues,
             "warnings": report.warnings,
-            "recommended_tasks": report.recommended_tasks
+            "recommended_tasks": report.recommended_tasks,
+            "file_infos": [
+                {
+                    "path": info.path,
+                    "filename": Path(info.path).name,
+                    "bands": info.bands,
+                    "width": info.width,
+                    "height": info.height,
+                    "crs": info.crs,
+                    "resolution_m": round(info.resolution_x, 2) if not (info.resolution_x != info.resolution_x) else 10.0,
+                    "sensor_hint": info.sensor_hint,
+                    "dtype": info.dtype,
+                    "acquisition_date": info.acquisition_date.isoformat() if info.acquisition_date else None,
+                }
+                for info in report.file_infos
+            ]
         }
     }

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { SidebarNav, NavSection } from "../components/Navigation/SidebarNav";
 import { UploadZone } from "../components/UploadZone";
 import { MapContainerWrapper } from "../components/MapCanvas/MapContainerWrapper";
@@ -17,6 +17,7 @@ import {
   InputConfiguration,
   GroundingBox
 } from "../types/satquery";
+import { checkBackendHealth, executeAgentQuery, uploadSatelliteImages } from "../lib/api";
 
 export default function Home() {
   const [currentScenarioIndex, setCurrentScenarioIndex] = useState<number>(0);
@@ -24,6 +25,10 @@ export default function Home() {
 
   const [files, setFiles] = useState<GeoTIFFMetadata[]>(scenario.files);
   const [activeSection, setActiveSection] = useState<NavSection>("chat");
+
+  // Backend connection state
+  const [backendOnline, setBackendOnline] = useState<boolean>(false);
+  const [backendDevice, setBackendDevice] = useState<string>("mps");
 
   // Map state
   const [mapCenter, setMapCenter] = useState<[number, number]>(scenario.files[0]?.center || [17.695, 83.300]);
@@ -39,6 +44,20 @@ export default function Home() {
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [currentRunningStep, setCurrentRunningStep] = useState<ExecutionTraceStep | null>(null);
   const [latestResponse, setLatestResponse] = useState<AssistantResponse | null>(null);
+
+  // Probe backend health
+  useEffect(() => {
+    const probe = async () => {
+      const health = await checkBackendHealth();
+      setBackendOnline(health.online);
+      if (health.data?.device) {
+        setBackendDevice(health.data.device);
+      }
+    };
+    probe();
+    const interval = setInterval(probe, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   const computeInputConfig = (currentFiles: GeoTIFFMetadata[]): InputConfiguration => {
     if (currentFiles.length === 0) return "Single Optical";
@@ -100,23 +119,83 @@ export default function Home() {
       }
     }
 
-    // Simulate tool execution trace sequentially
-    const simulatedSteps: ExecutionTraceStep[] = [];
-    for (const step of matchedScenario.response.execution_trace) {
-      setCurrentRunningStep({
-        ...step,
-        status: "running",
-      });
-      await new Promise((resolve) => setTimeout(resolve, step.duration_ms || 400));
-      simulatedSteps.push({
-        ...step,
-        status: "success",
-      });
+    let answerText = matchedScenario.response.text;
+    let confidenceTier = matchedScenario.response.confidence_tier;
+    let confidenceScore = matchedScenario.response.confidence_score;
+    let traceSteps: ExecutionTraceStep[] = [];
+    let boxes: GroundingBox[] = matchedScenario.response.grounding_boxes || [];
+    let changeStats = matchedScenario.response.change_stats;
+    let hasHeatmap = matchedScenario.response.has_heatmap;
+    let hasSwipeComp = matchedScenario.response.has_swipe_comparison;
+
+    // Try Live FastAPI Backend if available
+    let usedLiveBackend = false;
+    if (backendOnline) {
+      try {
+        const filePaths = files.map((f) => f.id);
+        const liveRes = await executeAgentQuery(queryText, filePaths);
+        if (liveRes.status === "success") {
+          usedLiveBackend = true;
+          answerText = liveRes.answer;
+          confidenceTier = liveRes.tier;
+          confidenceScore = Math.round(liveRes.confidence * 100);
+          
+          if (liveRes.execution_trace) {
+            traceSteps = [
+              {
+                step: 1,
+                tool: liveRes.execution_trace.selected_tool,
+                tool_display_name: liveRes.execution_trace.model_name,
+                params: liveRes.execution_trace.permitted_parameters || {},
+                duration_ms: Math.round(liveRes.execution_trace.latency_seconds * 1000),
+                status: "success",
+                output: {
+                  task: liveRes.execution_trace.selected_task,
+                  confidence: liveRes.execution_trace.confidence,
+                  orchestrator: liveRes.execution_trace.orchestrator,
+                }
+              }
+            ];
+          }
+
+          if (liveRes.bounding_boxes && liveRes.bounding_boxes.length > 0) {
+            boxes = liveRes.bounding_boxes.map((b, i) => ({
+              id: `box_live_${i}`,
+              label: queryText.slice(0, 24),
+              confidence: confidenceScore,
+              category: "anomaly" as const,
+              bbox: [
+                mapCenter[0] - 0.01 + (b[0] || 0) * 0.02,
+                mapCenter[1] - 0.01 + (b[1] || 0) * 0.02,
+                mapCenter[0] - 0.01 + (b[2] || 0.02) * 0.02,
+                mapCenter[1] - 0.01 + (b[3] || 0.02) * 0.02,
+              ],
+            }));
+          }
+        }
+      } catch (err) {
+        console.warn("Live backend query returned error, falling back to simulated engine:", err);
+      }
+    }
+
+    // If offline or fallback needed, simulate sequential tool execution
+    if (!usedLiveBackend) {
+      traceSteps = [];
+      for (const step of matchedScenario.response.execution_trace) {
+        setCurrentRunningStep({
+          ...step,
+          status: "running",
+        });
+        await new Promise((resolve) => setTimeout(resolve, step.duration_ms || 400));
+        traceSteps.push({
+          ...step,
+          status: "success",
+        });
+      }
     }
 
     setCurrentRunningStep(null);
 
-    const fullText = matchedScenario.response.text;
     const responseId = `asst_${Date.now()}`;
     const timestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
@@ -125,21 +204,21 @@ export default function Home() {
       sender: "assistant",
       timestamp,
       text: "",
-      confidence_tier: matchedScenario.response.confidence_tier,
-      confidence_score: matchedScenario.response.confidence_score,
+      confidence_tier: confidenceTier,
+      confidence_score: confidenceScore,
       scenario_id: matchedScenario.id,
-      execution_trace: simulatedSteps,
-      grounding_boxes: matchedScenario.response.grounding_boxes,
-      change_stats: matchedScenario.response.change_stats,
+      execution_trace: traceSteps,
+      grounding_boxes: boxes,
+      change_stats: changeStats,
       fusion_note: matchedScenario.response.fusion_note,
-      has_heatmap: matchedScenario.response.has_heatmap,
-      has_swipe_comparison: matchedScenario.response.has_swipe_comparison,
+      has_heatmap: hasHeatmap,
+      has_swipe_comparison: hasSwipeComp,
       pre_image_url: matchedScenario.response.pre_image_url,
       post_image_url: matchedScenario.response.post_image_url,
     };
 
-    // Simulated token reveal
-    const words = fullText.split(" ");
+    // Simulated token-by-token reveal
+    const words = answerText.split(" ");
     let currentRevealed = "";
 
     setMessages((prev) => [...prev, newAssistantResponse]);
@@ -161,7 +240,7 @@ export default function Home() {
     setMessages((prev) =>
       prev.map((msg) =>
         msg.id === responseId
-          ? { ...(msg as AssistantResponse), text: fullText }
+          ? { ...(msg as AssistantResponse), text: answerText }
           : msg
       )
     );
@@ -171,13 +250,13 @@ export default function Home() {
       setMapCenter(matchedScenario.files[0].center);
       setMapZoom(matchedScenario.id === "scenario-2-flood-change" ? 12 : 14);
     }
-    if (matchedScenario.response.grounding_boxes) {
-      setGroundingBoxes(matchedScenario.response.grounding_boxes);
+    if (boxes) {
+      setGroundingBoxes(boxes);
     }
-    if (matchedScenario.response.has_heatmap) {
+    if (hasHeatmap) {
       setShowHeatmap(true);
     }
-    if (matchedScenario.response.has_swipe_comparison) {
+    if (hasSwipeComp) {
       setHasSwipe(true);
       setPreImageUrl(matchedScenario.response.pre_image_url);
       setPostImageUrl(matchedScenario.response.post_image_url);
@@ -185,7 +264,7 @@ export default function Home() {
       setHasSwipe(false);
     }
 
-    setLatestResponse({ ...newAssistantResponse, text: fullText });
+    setLatestResponse({ ...newAssistantResponse, text: answerText });
     setIsProcessing(false);
   };
 
@@ -199,6 +278,8 @@ export default function Home() {
         filesCount={files.length}
         currentScenario={scenario}
         onSelectScenario={handleSelectScenario}
+        backendOnline={backendOnline}
+        backendDevice={backendDevice}
       />
 
       {/* Main Content Area */}

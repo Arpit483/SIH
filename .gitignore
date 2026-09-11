@@ -7,12 +7,29 @@
 # testing
 /coverage
 
+# python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+ENV/
+
 # next.js
 /.next/
 /out/
 
 # production
 /build
+
+# runtime data
+backend/uploads/*
+!backend/uploads/.gitkeep
+backend/reports/*
+!backend/reports/.gitkeep
+backend/traces/*
+!backend/traces/.gitkeep
 
 # misc
 .DS_Store

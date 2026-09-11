@@ -1,14 +1,17 @@
-﻿"""
+"""
 model_manager.py: High-performance Model Manager for SatQuery AI.
 
-Loads SatQueryUnified once at startup (~4.2GB VRAM on RTX 4060).
+Loads SatQueryUnified once at startup.
+Supports:
+  - NVIDIA CUDA GPU
+  - Apple Silicon GPU via Metal Performance Shaders (MPS on Mac M1/M2/M3/M4)
+  - Multi-threaded CPU Fallback
+
 Provides zero-latency dispatch for all 4 tasks:
   1. VQA
   2. Text-guided Region Grounding
   3. Bi-temporal Change Detection & Change-VQA
   4. Cross-Modal Optical-SAR Joint Fusion
-Seamlessly bridges sensor domain gaps using SensorNormalizer and calculates
-calibrated confidence scores using UnifiedConfidenceEngine.
 """
 
 import os
@@ -32,6 +35,17 @@ from backend.preprocessing.sensor_normalizer import SensorNormalizer, detect_sen
 logger = logging.getLogger("satquery.model_manager")
 
 
+def select_best_device(requested_device: Optional[str] = None) -> torch.device:
+    """Select the best available compute device for training/inference."""
+    if requested_device:
+        return torch.device(requested_device)
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
 class ModelManager:
     _instance: Optional["ModelManager"] = None
 
@@ -39,13 +53,16 @@ class ModelManager:
         if ModelManager._instance is not None:
             raise RuntimeError("Use ModelManager.get_instance() to access singleton.")
             
-        self.device = torch.device(
-            device if device else ("cuda" if torch.cuda.is_available() else "cpu")
-        )
-        logger.info("Initializing ModelManager on device: %s", self.device)
+        self.device = select_best_device(device)
+        logger.info("Initializing ModelManager on compute device: %s", self.device)
         
         # Load unified model
-        self.model = SatQueryUnified(freeze_backbone_on_init=True).to(self.device)
+        try:
+            self.model = SatQueryUnified(freeze_backbone_on_init=True).to(self.device)
+        except Exception as e:
+            logger.warning("SatQueryUnified initialization fallback: %s. Using CPU/Stub mode.", e)
+            self.device = torch.device("cpu")
+            self.model = SatQueryUnified(freeze_backbone_on_init=True).to(self.device)
         
         # Look for default checkpoint if none provided
         if checkpoint_path is None:
@@ -77,7 +94,7 @@ class ModelManager:
         
         # Warmup model in memory
         self._warmup()
-        logger.info("ModelManager fully initialized and warm-loaded in VRAM (~4.2GB footprint).")
+        logger.info("ModelManager fully initialized on %s.", self.device)
 
     @classmethod
     def get_instance(cls, checkpoint_path: Optional[str] = None) -> "ModelManager":
@@ -86,7 +103,7 @@ class ModelManager:
         return cls._instance
 
     def _warmup(self):
-        """Warm up CUDA kernels and JIT caches."""
+        """Warm up compute device kernels and JIT caches."""
         try:
             with torch.no_grad():
                 dummy_img = torch.zeros(1, 3, 224, 224, device=self.device)
@@ -203,7 +220,6 @@ class ModelManager:
             
         conf_info = self.confidence_engine.change_confidence(change_map_np)
         
-        # Describe change
         pct_change = float(np.mean(change_map_np >= 0.5) * 100.0)
         description = f"Detected {pct_change:.1f}% surface alteration between temporal observations."
         if pct_change > 15.0:

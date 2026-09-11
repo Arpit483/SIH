@@ -1,4 +1,4 @@
-﻿"""
+"""
 routes/report.py: Downloadable PDF Report Generator for SatQuery AI.
 Required deliverable for ISRO SIH26167.
 """
@@ -10,9 +10,10 @@ from pydantic import BaseModel
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 router = APIRouter(prefix="/api", tags=["report"])
 
-REPORTS_DIR = Path("d:/SIH/backend/reports")
+REPORTS_DIR = PROJECT_ROOT / "backend" / "reports"
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 class ReportRequest(BaseModel):
