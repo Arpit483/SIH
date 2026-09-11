@@ -1,0 +1,25 @@
+﻿# Core ML & VLM
+torch>=2.2.0
+torchvision>=0.17.0
+open-clip-torch>=2.24.0
+transformers>=4.40.0
+peft>=0.10.0
+datasets>=2.18.0
+timm>=0.9.16
+
+# Geospatial & Imaging
+numpy>=1.24.0
+scipy>=1.11.0
+pillow>=10.0.0
+opencv-python>=4.8.0
+rasterio>=1.3.9
+torchgeo>=0.5.0
+
+# Backend & Web Serving
+fastapi>=0.110.0
+uvicorn[standard]>=0.28.0
+pydantic>=2.6.0
+python-multipart>=0.0.9
+reportlab>=4.1.0
+pyyaml>=6.0.1
+anthropic>=0.20.0

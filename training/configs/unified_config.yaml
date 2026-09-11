@@ -1,0 +1,203 @@
+# =============================================================================
+# SatQuery AI — Unified Training Configuration
+# =============================================================================
+# unified_config.yaml
+#
+# Controls all training stages, datasets, sensor normalisation, confidence
+# thresholds, compute settings, and evaluation benchmarks.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Model backbone
+# ---------------------------------------------------------------------------
+model:
+  backbone: 'chenyangqiqi/RemoteCLIP-ViT-L-14'   # primary; GeoRSCLIP as fallback
+  backbone_dim: 1024
+  freeze_backbone_stage1: true    # backbone frozen during stage 1
+  freeze_backbone_stage2: false   # backbone unfrozen (low LR) in stage 2
+
+# ---------------------------------------------------------------------------
+# Task heads
+# ---------------------------------------------------------------------------
+heads:
+  vqa:
+    decoder: 'google/flan-t5-base'
+    max_input_length: 512
+    max_output_length: 64
+
+  grounding:
+    num_queries: 100
+    num_classes: 1                # binary: object vs. background
+    hidden_dim: 256
+
+  change:
+    siamese_diff_channels: [512, 256]
+    unet_decoder_channels: [256, 128, 64, 32]
+    change_vqa: true              # share VQA head for change-VQA subtask
+
+  fusion:
+    cross_attn_heads: 8
+    cross_attn_layers: 2
+    embed_dim: 384
+
+# ---------------------------------------------------------------------------
+# Training stage 1 — frozen backbone, warm up all heads
+# ---------------------------------------------------------------------------
+stage1:
+  epochs: 3
+  lr: 1.0e-4
+  batch_size: 16                  # per GPU (2× T4 target)
+  grad_accumulation: 4            # effective batch = 16 × 4 × 2 GPUs = 128
+  loss_weights:
+    vqa: 1.0
+    grounding: 1.0
+    change: 1.0
+    fusion: 1.0
+
+# ---------------------------------------------------------------------------
+# Training stage 2 — unfreeze backbone with differential LR
+# ---------------------------------------------------------------------------
+stage2:
+  epochs: 5
+  lr: 5.0e-5
+  backbone_lr: 1.0e-5             # lower LR for pretrained backbone
+  batch_size: 8
+  grad_accumulation: 8            # effective batch = 8 × 8 × 2 GPUs = 128
+  loss_weights:
+    vqa: 1.0
+    grounding: 1.2                # upweight harder tasks
+    change: 1.2
+    fusion: 1.0
+
+# ---------------------------------------------------------------------------
+# Training stage 3 — fine-tune each head independently (others at 0)
+# ---------------------------------------------------------------------------
+stage3:
+  epochs: 3
+  lr: 2.0e-5
+  batch_size: 16
+  grad_accumulation: 4
+  # Set weights of non-target heads to 0 in per-head fine-tuning runs.
+  # Example for VQA-only fine-tune:
+  #   loss_weights: {vqa: 1.0, grounding: 0.0, change: 0.0, fusion: 0.0}
+
+# ---------------------------------------------------------------------------
+# Datasets (primary)
+# ---------------------------------------------------------------------------
+data:
+  bigearthnet_txt:
+    hf_id: 'BIFOLD-BigEarthNetv2-0/BigEarthNet.txt'
+    tasks: ['vqa', 'captioning', 'grounding']
+    max_samples: 200000           # subset for time budget
+
+  rsvqa_hr:
+    local_path: './datasets/rsvqa_hr'
+
+  rsvqa_lr:
+    local_path: './datasets/rsvqa_lr'
+
+  vrsbench:
+    local_path: './datasets/vrsbench'
+
+  cdvqa:
+    local_path: './datasets/cdvqa'
+
+  sarlang_1m:                     # SAR supplement
+    hf_id: 'YiminJimmy/SARLANG-1M'
+    max_samples: 100000
+
+# ---------------------------------------------------------------------------
+# Fallback datasets (if BigEarthNet.txt not fully available)
+# ---------------------------------------------------------------------------
+fallback_data:
+  rs5m:
+    hf_id: 'Zilun/RS5M'
+    max_samples: 500000
+
+  adaptllm_rs:
+    hf_id: 'AdaptLLM/remote-sensing-visual-instructions'
+
+# ---------------------------------------------------------------------------
+# Sensor normalisation
+# ---------------------------------------------------------------------------
+normalization:
+  sentinel2:
+    offset: 1000
+    scale: 10000
+    clip_min: 0.0
+    clip_max: 1.0
+
+  sentinel1_vv:
+    db_min: -25.0
+    db_max: 0.0
+
+  sentinel1_vh:
+    db_min: -32.0
+    db_max: -5.0
+
+  cartosat2s:
+    bit_depth: 11
+    dos_dark_percentile: 1        # dark-object subtraction percentile
+
+  risat_c:
+    nesz_db: -23.0
+    speckle_filter: 'refined_lee_5x5'
+
+  risat_x:
+    nesz_db: -22.0
+    speckle_filter: 'refined_lee_5x5'
+
+# ---------------------------------------------------------------------------
+# Confidence engine
+# ---------------------------------------------------------------------------
+confidence:
+  high_threshold: 0.80
+  medium_threshold: 0.55
+  vqa_geom_weight: 0.70           # weight of geometric mean in C_vqa
+  temperature_init: 1.0           # initial T for TemperatureScaler
+
+# ---------------------------------------------------------------------------
+# Compute / Kaggle
+# ---------------------------------------------------------------------------
+compute:
+  mixed_precision: 'fp16'
+  gradient_checkpointing: true
+  dataloader_workers: 4
+  pin_memory: true
+  kaggle_output_dir: '/kaggle/working/satquery'
+  local_debug: true
+  debug_samples: 100
+
+# ---------------------------------------------------------------------------
+# Evaluation
+# ---------------------------------------------------------------------------
+eval:
+  benchmarks:
+    - rsvqa_hr
+    - rsvqa_lr
+    - vrsbench
+    - cdvqa
+  metrics:
+    vqa:
+      - accuracy
+      - f1
+    grounding:
+      - iou_50
+      - map
+    change:
+      - f1
+      - miou
+      - cdvqa_accuracy
+  normalize_scores: true          # per judging criteria
+
+# ---------------------------------------------------------------------------
+# Weights & Biases logging
+# ---------------------------------------------------------------------------
+wandb:
+  project: 'satquery-ai-sih'
+  entity: null                    # set your W&B username / team here
+  tags:
+    - sih2026
+    - isro
+    - remoteclip
+    - multitask
