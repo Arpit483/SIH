@@ -24,6 +24,7 @@ ENV/
 /build
 
 # runtime data
+Outputs/
 backend/uploads/*
 !backend/uploads/.gitkeep
 backend/reports/*
